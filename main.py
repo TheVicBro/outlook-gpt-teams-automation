@@ -18,48 +18,54 @@ target_address = os.getenv("TARGET_ADDRESS")
 teams_webhook_url = os.getenv("TEAMS_WEBHOOK_URL")
 
 def main():
-    email_content = get_latest_email(email_address, email_app_password, target_address)
-    print(email_content)
-    print()
-    print(f"Given this email, write a reply:\n{email_content}")
-    response = get_completion(f"Given this email, write a reply:\n{email_content}")
-    send_to_teams(email_content)
-    if response.err:
-        print(response.message)
-        send_to_teams(response.message)
+    emails = get_all_unread_emails(email_address, email_app_password, target_address)
+    if emails:
+        for email_content in emails:
+            response = get_completion(f"Given this email, write a reply:\n{email_content}")
+            original_msg = "**Original Email:**\n\n" + email_content.replace('\n', '\n\n')
+            if response.err:
+                response_msg = "\n\n---\n\n**Response Error:**\n\n" + response.message.replace('\n', '\n\n')
+            else:
+                response_msg = "\n\n---\n\n**Reply:**\n\n" + response.payload.replace('\n', '\n\n')
+            send_to_teams(original_msg + response_msg)
     else:
-        print(response.payload)
-        send_to_teams(response.payload)
+        print("No emails found")
 
-def get_latest_email(email_address, app_password, target_address):
+def get_all_unread_emails(email_address, app_password, target_address):
     # Connect and login
     mail = imaplib.IMAP4_SSL('imap.gmail.com')
     mail.login(email_address, app_password)
     mail.select('inbox')
 
     # Search for unread emails from the target address
-    result, data = mail.search(None, '(FROM "{}")'.format(target_address))
+    result, data = mail.search(None, '(UNSEEN FROM "{}")'.format(target_address))
+    if result != 'OK':
+        print(f"Error searching for emails: {result}")
+        return None
     
     if not data or not data[0]:
-        return None
-
-    # Getting the latest email ID
-    latest_email_id = data[0].split()[-1]
-
-    result, email_data = mail.fetch(latest_email_id, '(RFC822)')
-    raw_email = email_data[0][1]
-    raw_email_string = raw_email.decode('utf-8')
-    msg = email.message_from_string(raw_email_string)
+        return []
     
-    email_body = ""
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == "text/plain":
-                email_body = part.get_payload(decode=True).decode()
-    else:
-        email_body = msg.get_payload(decode=True).decode()
+    email_ids = data[0].split()
+    email_bodies = []
 
-    return clean_string(email_body)
+    for email_id in email_ids:
+        result, email_data = mail.fetch(email_id, '(RFC822)')
+        raw_email = email_data[0][1]
+        raw_email_string = raw_email.decode('utf-8')
+        msg = email.message_from_string(raw_email_string)
+        
+        if msg.is_multipart():
+            for part in msg.walk():
+                if part.get_content_type() == "text/plain":
+                    email_bodies.append(clean_string(part.get_payload(decode=True).decode()))
+        else:
+            email_bodies.append(clean_string(msg.get_payload(decode=True).decode()))
+
+        # Mark the email as read
+        mail.store(email_id, '+FLAGS', '\\Seen')
+
+    return email_bodies
 
 def clean_string(s):
     # Remove non-alphanumeric characters except for newlines and spaces
@@ -94,7 +100,7 @@ def send_to_teams(message):
     }
     response = requests.post(teams_webhook_url, headers=headers, json=data)
 
-    print("finished")
+    print("\nTeams message sent\n")
     return response.status_code
 
 if __name__ == "__main__":
