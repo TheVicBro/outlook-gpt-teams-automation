@@ -1,4 +1,4 @@
-# outlook-gpt-teams-automation
+# power-apps-openai-teams-automation
 
 ## Overview
 
